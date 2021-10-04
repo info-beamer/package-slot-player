@@ -1,0 +1,79 @@
+#!/usr/bin/python
+import time, sys, pytz
+from datetime import datetime
+from hosted import config, node
+from slots import Slots
+from p2plib import monotonic_time
+
+PRELOAD = 1.5
+
+def log(msg, name='slotmgr'):
+    print >>sys.stderr, "[{}] {}".format(name, msg)
+
+def get_date_hour():
+    tz = pytz.timezone(config.timezone)
+    utc_now = datetime.now(pytz.utc)
+    local_now = utc_now.astimezone(tz)
+    date = local_now.strftime("%Y-%m-%d")
+    hour = local_now.hour + 1. / 60 * local_now.minute
+    return date, hour
+
+class Scheduler(object):
+    def __init__(self):
+        self._old_rev, self._old_date = None, None
+        self._slots = None
+
+    def next_item(self):
+        date, hour = get_date_hour()
+        log("date: %s, hour: %.4f" % (date, hour))
+        if (
+            config.metadata['config_rev'] != self._old_rev or
+            date != self._old_date
+        ):
+            log('reloading playlist')
+            active_content = []
+            for idx, item in enumerate(config.content):
+                if item['start_date'] and date < item['start_date']['value']:
+                    continue
+                if item['end_date'] and date > item['end_date']['value']:
+                    continue
+                if item['slots'] == 0:
+                    continue
+                active_content.append(dict(idx=idx, **item))
+            log('active content: %d items' % len(active_content))
+            self._slots = Slots(active_content)
+            self._old_rev = config.metadata['config_rev']
+            self._old_date = date
+        item = self._slots.get_next()
+        return item
+
+scheduler = Scheduler()
+
+def sleep_until(t):
+    now = monotonic_time()
+    delta = t - now
+    if delta > 0:
+        time.sleep(delta)
+
+def main():
+    lua = node.rpc()
+    item = None
+    next_switch = monotonic_time() + PRELOAD + 0.1
+
+    while 1:
+        sleep_until(next_switch - PRELOAD)
+        # it's now PRELOAD seconds before the current item ends
+
+        item = scheduler.next_item()
+        log('item: %r' % (item,))
+
+        lua.preload(item['idx']+1 if item else 'none')
+
+        sleep_until(next_switch)
+        lua.switch()
+
+        # content has switched now. Decide when to switch next.
+        next_switch = next_switch + config.slot_duration
+
+if __name__ == "__main__":
+    main()

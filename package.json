@@ -1,0 +1,18 @@
+{
+    "name": "Slot Player",
+    "author": "Florian Wesch <fw@info-beamer.com>",
+    "desc": "Slot based scheduled content player",
+    "app": "a98bdb2d995a28f113841153e29fa78c",
+    "repository": "https://github.com/info-beamer/slot-player",
+    "platforms": ["pi/epoch-1", "pi/epoch-2"],
+    "lifecycle": "beta",
+    "version": "beta1",
+    "offline": {
+        "support": "no",
+        "info": "Needs a proper system time for scheduling"
+    },
+    "nesting": {
+        "parents": ["top-level"],
+        "childs": []
+    }
+}
