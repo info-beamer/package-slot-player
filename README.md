@@ -1,5 +1,7 @@
 # Slot Player
 
+[![Import](https://cdn.infobeamer.com/s/img/import.png)](https://info-beamer.com/use?url=https://github.com/info-beamer/package-slot-player)
+
 This package allows you to schedule slot based content across multiple players.
 
 Slot based means that content is organized within slots of, for example, 10 seconds. Those
