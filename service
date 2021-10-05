@@ -71,6 +71,7 @@ def record_playback(asset_id, duration):
     with open(os.path.join(os.environ['SCRATCH'], 'playback.log'), 'ab') as f:
         f.write(json.dumps(pop))
         f.write('\n')
+        f.flush()
         os.fsync(f.fileno())
 
 def sleep_until(t):
