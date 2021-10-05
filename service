@@ -1,7 +1,7 @@
 #!/usr/bin/python
-import time, sys, pytz
+import time, sys, pytz, os, json
 from datetime import datetime
-from hosted import config, node
+from hosted import config, node, device
 from slots import Slots
 from p2plib import monotonic_time
 
@@ -26,6 +26,11 @@ class Scheduler(object):
     def next_item(self):
         date, hour = get_date_hour()
         log("date: %s, hour: %.4f" % (date, hour))
+
+        # Outside of configured operating hours?
+        if hour < config.hour_start or hour >= config.hour_end:
+            return 'idle'
+
         if (
             config.metadata['config_rev'] != self._old_rev or
             date != self._old_date
@@ -44,10 +49,29 @@ class Scheduler(object):
             self._slots = Slots(active_content)
             self._old_rev = config.metadata['config_rev']
             self._old_date = date
+
         item = self._slots.get_next()
-        return item
+        if item is None:
+            return 'no-item'
+
+        return item['idx']+1
 
 scheduler = Scheduler()
+lua = node.rpc()
+
+@lua.call
+def record_playback(asset_id, duration):
+    pop = dict(
+        ts = int(time.time()),
+        device_id = config.metadata['device_id'],
+        asset_id = asset_id,
+        duration = duration,
+    )
+    log('playback of %r started' % (pop,))
+    with open(os.path.join(os.environ['SCRATCH'], 'playback.log'), 'ab') as f:
+        f.write(json.dumps(pop))
+        f.write('\n')
+        os.fsync(f.fileno())
 
 def sleep_until(t):
     now = monotonic_time()
@@ -56,8 +80,6 @@ def sleep_until(t):
         time.sleep(delta)
 
 def main():
-    lua = node.rpc()
-    item = None
     next_switch = monotonic_time() + PRELOAD + 0.1
 
     while 1:
@@ -65,9 +87,13 @@ def main():
         # it's now PRELOAD seconds before the current item ends
 
         item = scheduler.next_item()
-        log('item: %r' % (item,))
 
-        lua.preload(item['idx']+1 if item else 'none')
+        if item == 'idle' and config.suspend:
+            device.turn_screen_off()
+        else:
+            device.turn_screen_on()
+
+        lua.preload(item)
 
         sleep_until(next_switch)
         lua.switch()

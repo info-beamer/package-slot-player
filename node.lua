@@ -107,47 +107,97 @@ local function Display()
 end
 local Display = Display()
 
-local function Empty()
-    return setmetatable({
-        asset = nil,
-        asset_name = nil,
-
-        draw = function(self, ...)
-            font:write(10, 10, "Nothing scheduled", 20, 1,1,1,.8)
+local function Text(text)
+    local w, h = Display.size()
+    local x = math.random(0, w-100)
+    local y = math.random(0, h-20)
+    return {
+        draw = function()
+            font:write(x, y, text, 16, 1,1,1,.8)
         end;
-
-        dispose = function(self)
+        hide = function()
         end;
-    }, {
-        __typename = "image"
-    })
+        dispose = function()
+        end;
+    }
+end
+
+local function Image(file, asset_id)
+    local res = resource.load_image{
+        file = file,
+    }
+    local started
+    return {
+        draw = function(...)
+            if not started then
+                started = sys.now()
+            end
+            return Display.draw_image(res, ...)
+        end;
+        hide = function()
+        end;
+        dispose = function()
+            if started then
+                py.record_playback(asset_id, sys.now() - started)
+            end
+            res:dispose()
+        end;
+    }
+end
+
+local function Video(file, asset_id)
+    local res = resource.load_video{
+        file = file,
+        raw = true,
+        paused = true,
+        audio = true,
+    }
+    local started = false
+    return {
+        draw = function(...)
+            if not started then
+                res:start()
+                started = sys.now()
+            end
+            Display.draw_video(res, ...):layer(-1)
+        end;
+        hide = function()
+            res:layer(-2)
+        end;
+        dispose = function()
+            if started then
+                py.record_playback(asset_id, sys.now() - started)
+            end
+            res:dispose()
+        end;
+    }
 end
 
 -----------
 
 local old, cur, nxt
 local playlist = {}
+local overwrite_x1, overwrite_y1, overwrite_x2, overwrite_y2
 
-py.register("preload", function(item_idx)
+py.register("preload", function(item)
     if nxt then
-        nxt:dispose()
+        nxt.dispose()
     end
 
-    local item = playlist[item_idx]
-
-    if not item then
-        nxt = Empty()
-    elseif item.type == "image" then
-        nxt = resource.load_image{
-            file = item.file:copy(),
-        }
+    if item == 'no-item' then
+        nxt = Text('nothing scheduled')
+    elseif item == 'idle' then
+        nxt = Text('idle')
     else
-        nxt = resource.load_video{
-            file = item.file:copy(),
-            raw = true,
-            paused = true,
-            audio = true,
-        }
+        local item = playlist[item]
+
+        if not item then
+            nxt = Text('scheduled item not found')
+        elseif item.type == "image" then
+            nxt = Image(item.file:copy(), item.asset_id)
+        else
+            nxt = Video(item.file:copy(), item.asset_id)
+        end
     end
 end)
 
@@ -156,7 +206,7 @@ py.register("switch", function()
         return
     end
     if old then
-        old:dispose()
+        old.dispose()
     end
     old = cur
     cur = nxt
@@ -168,20 +218,25 @@ local function draw()
         return
     end
 
-    if old and type(old) ~= "image" then
-        old:layer(-2)
+    if old then
+        old.hide()
     end
 
     local x1, y1, x2, y2 = Display.place(0, 1)
-    if type(cur) == "image" then
-        Display.draw_image(cur, x1, y1, x2, y2)
-    else
-        cur:start()
-        Display.draw_video(cur, x1, y1, x2, y2):layer(-1)
+
+    if overwrite_x1 ~= 0 or overwrite_y1 ~= 0 or
+       overwrite_x2 ~= 0 or overwrite_y2 ~= 0
+    then
+        x1 = overwrite_x1
+        y1 = overwrite_y1
+        x2 = overwrite_x2
+        y2 = overwrite_y2
     end
 
+    cur.draw(x1, y1, x2, y2)
+
     if old then
-        old:dispose()
+        old.dispose()
         old = nil
     end
 end
@@ -189,11 +244,17 @@ end
 util.json_watch("config.json", function(config)
     Display.update_placement(config.rotation, 0, 1)
 
+    overwrite_x1 = config.x1
+    overwrite_y1 = config.y1
+    overwrite_x2 = config.x2
+    overwrite_y2 = config.y2
+
     local new_playlist = {}
     for _, item in ipairs(config.content) do
         new_playlist[#new_playlist+1] = {
             file = resource.open_file(item.file.asset_name),
             type = item.file.type,
+            asset_id = item.file.asset_id,
         }
     end
     playlist = new_playlist
@@ -203,6 +264,5 @@ end)
 function node.render()
     Display.frame_setup()
     gl.clear(0,0,0,0)
-
     draw()
 end

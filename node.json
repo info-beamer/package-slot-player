@@ -451,14 +451,56 @@
         ],
         "default": 23
     }, {
-        "title": "Slot duration (seconds)",
-        "ui_width": 3,
+        "title": "Slot time (s)",
+        "ui_width": 2,
+        "hint": "Duration of each playback slot in seconds",
         "name": "slot_duration",
         "type": "duration",
         "default": 10
     }, {
-        "title": "Rotation",
+        "title": "When idle",
+        "hint": "If set, suspend display during idle hours",
+        "ui_width": 3,
+        "name": "suspend",
+        "type": "select",
+        "options": [
+            [false, "keep display on"],
+            [true, "turn off display"]
+        ],
+        "default": false
+    },
+
+    {
+        "title": "Placement",
+        "intro": "If any coordinate is not zero, overwrite the content placement on the screen using the provided coordinates. Otherwise the content is placed on the available screen space.",
+        "type": "section"
+    }, {
+        "title": "x1",
         "ui_width": 2,
+        "name": "x1",
+        "type": "integer",
+        "default": 0
+    }, {
+        "title": "y1",
+        "ui_width": 2,
+        "name": "y1",
+        "type": "integer",
+        "default": 0
+    }, {
+        "title": "x2",
+        "ui_width": 2,
+        "name": "x2",
+        "type": "integer",
+        "default": 0
+    }, {
+        "title": "y2",
+        "ui_width": 2,
+        "name": "y2",
+        "type": "integer",
+        "default": 0
+    }, {
+        "title": "Rotation",
+        "ui_width": 4,
         "name": "rotation",
         "type": "select",
         "options": [
