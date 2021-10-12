@@ -1,5 +1,8 @@
 {
     "name": "Slot Player",
+    "permissions": {
+        "network": "Needs to submit proof of play information"
+    },
     "options": [{
         "title": "Assigned content",
         "type": "section"

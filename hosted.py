@@ -31,10 +31,10 @@
 # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-VERSION = "1.7"
+VERSION = "1.8"
 
 import os, re, sys, json, time, traceback, marshal, hashlib
-import errno, socket, select, threading
+import errno, socket, select, threading, Queue, ctypes
 import pyinotify, requests
 from functools import wraps
 from collections import namedtuple
@@ -122,6 +122,23 @@ def abort_service(reason):
     time.sleep(2)
     os.kill(os.getpid(), 9)
     time.sleep(100)
+
+CLOCK_MONOTONIC_RAW = 4 # see <linux/time.h>
+
+class timespec(ctypes.Structure):
+    _fields_ = [
+        ('tv_sec', ctypes.c_long),
+        ('tv_nsec', ctypes.c_long),
+    ]
+
+librt = ctypes.CDLL('librt.so.1')
+clock_gettime = librt.clock_gettime
+clock_gettime.argtypes = [ctypes.c_int, ctypes.POINTER(timespec)]
+
+def monotonic_time():
+    t = timespec()
+    clock_gettime(CLOCK_MONOTONIC_RAW , ctypes.pointer(t))
+    return t.tv_sec + t.tv_nsec * 1e-9
 
 class InfoBeamerQueryException(Exception):
     pass
@@ -1013,11 +1030,140 @@ class SyncerAPI(object):
             data=data, timeout=10
         ))
 
+class ProofOfPlay(object):
+    def __init__(self, api, dirname):
+        self._api = api
+        self._prefix = os.path.join(os.environ['SCRATCH'], dirname)
+        try:
+            os.makedirs(self._prefix)
+        except:
+            pass
+
+        pop_info = self._api.pop.get()
+
+        self._max_delay = pop_info['max_delay']
+        self._max_lines = pop_info['max_lines']
+        self._submission_min_delay = pop_info['submission']['min_delay']
+        self._submission_error_delay = pop_info['submission']['error_delay']
+
+        self._q = Queue.Queue()
+        self._log = None
+
+        thread = threading.Thread(target=self._submit_thread)
+        thread.daemon = True
+        thread.start()
+
+        thread = threading.Thread(target=self._writer_thread)
+        thread.daemon = True
+        thread.start()
+
+    def _submit(self, fname, queue_size):
+        with open(fname, 'rb') as f:
+            return self._api.pop.post(
+                timeout = 10,
+                data = {
+                    'queue_size': queue_size,
+                },
+                files={
+                    'pop-v1': f,
+                }
+            )
+
+    def _submit_thread(self):
+        time.sleep(3)
+        while 1:
+            delay = self._submission_min_delay
+            try:
+                log('[pop][submit] gathering files')
+                files = [
+                    fname for fname
+                    in os.listdir(self._prefix)
+                    if fname.startswith('submit-')
+                ]
+                log('[pop][submit] %d files' % len(files))
+                for fname in files:
+                    fullname = os.path.join(self._prefix, fname)
+                    if os.stat(fullname).st_size == 0:
+                        os.unlink(fullname)
+                        continue
+                    try:
+                        log('[pop][submit] submitting %s' % fullname)
+                        self._submit(fullname, len(files))
+                        log('[pop][submit] success')
+                    except APIError as err:
+                        log('[pop][submit] failure to submit log %s: %s' % (
+                            fullname, err
+                        ))
+                        delay = self._submission_error_delay
+                        break
+                    os.unlink(fullname)
+                    break
+                if not files:
+                    delay = 10
+            except Exception as err:
+                log('[pop][submit] error: %s' % err)
+            log('[pop][submit] sleeping %ds' % delay)
+            time.sleep(delay)
+
+    def reopen_log(self):
+        log_name = os.path.join(self._prefix, 'current.log')
+        if self._log is not None:
+            self._log.close()
+            self._log = None
+        if os.path.exists(log_name):
+            os.rename(log_name, os.path.join(
+                self._prefix, 'submit-%s.log' % os.urandom(16).encode('hex')
+            ))
+        self._log = open(log_name, 'wb')
+        return self._log
+
+    def _writer_thread(self):
+        submit, log_file, lines = monotonic_time() + self._max_delay, self.reopen_log(), 0
+        while 1:
+            reopen = False
+            max_wait = max(0.1, submit - monotonic_time())
+            log('[pop] got %d lines. waiting %ds for more log lines' % (lines, max_wait))
+            try:
+                line = self._q.get(block=True, timeout=max_wait)
+                log_file.write(line + '\n')
+                log_file.flush()
+                os.fsync(log_file.fileno())
+                lines += 1
+                log('[pop] line added: %r' % line)
+            except Queue.Empty:
+                if lines == 0:
+                    submit += self._max_delay # extend deadline
+                else:
+                    reopen = True
+            except Exception as err:
+                log("[pop] error writing pop log line")
+            if lines >= self._max_lines:
+                reopen = True
+            if reopen:
+                log('[pop] closing log of %d lines' % lines)
+                submit, log_file, lines = monotonic_time() + self._max_delay, self.reopen_log(), 0
+
+    def log(self, play_start, duration, asset_id, asset_filename):
+        uuid = "%08x%s" % (
+            time.time(), os.urandom(12).encode('hex')
+        )
+        self._q.put(json.dumps([
+                uuid,
+                play_start,
+                duration,
+                0 if asset_id is None else asset_id,
+                asset_filename,
+            ],
+            ensure_ascii = False,
+            separators = (',',':'),
+        ).encode('utf8'))
+
 class Device(object):
-    def __init__(self, kv):
+    def __init__(self, kv, api):
         self._socket = None
         self._gpio = GPIO()
         self._kv = kv
+        self._api = api
 
     @property
     def kv(self):
@@ -1043,6 +1189,10 @@ class Device(object):
     @property
     def screen_h(self):
         return self.screen_resolution[1]
+
+    @property
+    def syncer_api(self):
+        return SyncerAPI()
 
     def ensure_connected(self):
         if self._socket:
@@ -1093,9 +1243,8 @@ class Device(object):
     def verify_cache(self):
         self.send_raw("syncer verify_cache")
 
-    @property
-    def syncer_api(self):
-        return SyncerAPI()
+    def pop(self, dirname='pop'):
+        return ProofOfPlay(self._api, dirname)
 
 if __name__ == "__main__":
     print("nothing to do here")
@@ -1108,6 +1257,7 @@ else:
     api = API = OnDeviceAPIs(CONFIG)
     device = DEVICE = Device(
         kv = DeviceKV(api),
+        api = api,
     )
 
     setup_inotify(CONFIG)

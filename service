@@ -1,9 +1,8 @@
 #!/usr/bin/python
-import time, sys, pytz, os, json
+import time, sys, pytz
 from datetime import datetime
-from hosted import config, node, device
+from hosted import config, node, device, monotonic_time
 from slots import Slots
-from p2plib import monotonic_time
 
 PRELOAD = 1.5
 
@@ -59,20 +58,16 @@ class Scheduler(object):
 scheduler = Scheduler()
 lua = node.rpc()
 
+pop = device.pop()
+
 @lua.call
-def record_playback(asset_id, duration):
-    pop = dict(
-        ts = int(time.time()),
-        device_id = config.metadata['device_id'],
+def record_playback(asset_id, asset_filename, duration):
+    pop.log(
         asset_id = asset_id,
+        asset_filename = asset_filename,
+        play_start = time.time() - duration,
         duration = duration,
     )
-    log('playback of %r started' % (pop,))
-    with open(os.path.join(os.environ['SCRATCH'], 'playback.log'), 'ab') as f:
-        f.write(json.dumps(pop))
-        f.write('\n')
-        f.flush()
-        os.fsync(f.fileno())
 
 def sleep_until(t):
     now = monotonic_time()

@@ -122,7 +122,7 @@ local function Text(text)
     }
 end
 
-local function Image(file, asset_id)
+local function Image(file, asset_id, asset_filename)
     local res = resource.load_image{
         file = file,
     }
@@ -138,14 +138,14 @@ local function Image(file, asset_id)
         end;
         dispose = function()
             if started then
-                py.record_playback(asset_id, sys.now() - started)
+                py.record_playback(asset_id, asset_filename, sys.now() - started)
             end
             res:dispose()
         end;
     }
 end
 
-local function Video(file, asset_id)
+local function Video(file, asset_id, asset_filename)
     local res = resource.load_video{
         file = file,
         raw = true,
@@ -166,7 +166,7 @@ local function Video(file, asset_id)
         end;
         dispose = function()
             if started then
-                py.record_playback(asset_id, sys.now() - started)
+                py.record_playback(asset_id, asset_filename, sys.now() - started)
             end
             res:dispose()
         end;
@@ -194,9 +194,9 @@ py.register("preload", function(item)
         if not item then
             nxt = Text('scheduled item not found')
         elseif item.type == "image" then
-            nxt = Image(item.file:copy(), item.asset_id)
+            nxt = Image(item.file:copy(), item.asset_id, item.asset_filename)
         else
-            nxt = Video(item.file:copy(), item.asset_id)
+            nxt = Video(item.file:copy(), item.asset_id, item.asset_filename)
         end
     end
 end)
@@ -255,6 +255,7 @@ util.json_watch("config.json", function(config)
             file = resource.open_file(item.file.asset_name),
             type = item.file.type,
             asset_id = item.file.asset_id,
+            asset_filename = item.file.filename,
         }
     end
     playlist = new_playlist
