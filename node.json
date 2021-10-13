@@ -5,6 +5,7 @@
     },
     "options": [{
         "title": "Assigned content",
+        "intro": "NOTE: You should not manually edit this playlist here. Instead use the companion web app linked on the left.",
         "type": "section"
     }, {
         "title": "Content",
