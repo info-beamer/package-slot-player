@@ -1088,8 +1088,11 @@ class ProofOfPlay(object):
                         continue
                     try:
                         log('[pop][submit] submitting %s' % fullname)
-                        self._submit(fullname, len(files))
-                        log('[pop][submit] success')
+                        status = self._submit(fullname, len(files))
+                        if status['disabled']:
+                            log('[pop][submit] WARNING: Proof of Play disabled for this device. Submission discarded')
+                        else:
+                            log('[pop][submit] success')
                     except APIError as err:
                         log('[pop][submit] failure to submit log %s: %s' % (
                             fullname, err
