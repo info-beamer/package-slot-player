@@ -453,7 +453,7 @@
             [23, "23:00"],
             [24, "24:00"]
         ],
-        "default": 23
+        "default": 24
     }, {
         "title": "Slot time (s)",
         "ui_width": 2,
