@@ -31,7 +31,7 @@
 # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-VERSION = "1.8"
+VERSION = "1.9"
 
 import os, re, sys, json, time, traceback, marshal, hashlib
 import errno, socket, select, threading, Queue, ctypes
@@ -93,6 +93,10 @@ def init_types():
 
     @type
     def resource(value):
+        return value
+
+    @type
+    def device_token(value):
         return value
 
     @type
@@ -758,16 +762,16 @@ class APIProxy(object):
         else:
             return r.content
 
-    def add_defaults(self, kwargs):
+    def add_default_args(self, kwargs):
         if not 'timeout' in kwargs:
             kwargs['timeout'] = 10
+        return kwargs
 
     def get(self, **kwargs):
-        self.add_defaults(kwargs)
         try:
             return self.unwrap(self._apis.session.get(
                 url = self.url,
-                **kwargs
+                **self.add_default_args(kwargs)
             ))
         except APIError:
             raise
@@ -775,11 +779,10 @@ class APIProxy(object):
             raise APIError(err)
 
     def post(self, **kwargs):
-        self.add_defaults(kwargs)
         try:
             return self.unwrap(self._apis.session.post(
                 url = self.url,
-                **kwargs
+                **self.add_default_args(kwargs)
             ))
         except APIError:
             raise
@@ -787,11 +790,10 @@ class APIProxy(object):
             raise APIError(err)
 
     def delete(self, **kwargs):
-        self.add_defaults(kwargs)
         try:
             return self.unwrap(self._apis.session.delete(
                 url = self.url,
-                **kwargs
+                **self.add_default_args(kwargs)
             ))
         except APIError:
             raise
@@ -846,6 +848,108 @@ class OnDeviceAPIs(object):
 
     def __getattr__(self, api_name):
         return APIProxy(self, api_name)
+
+class HostedAPI(object):
+    def __init__(self, api, on_device_token):
+        self._api = api
+        self._on_device_token = on_device_token
+        self._lock = threading.Lock()
+        self._next_refresh = 0
+        self._api_key = None
+        self._uses = 0
+        self._expire = 0
+        self._base_url = None
+        self._session = requests.Session()
+        self._session.headers.update({
+            'User-Agent': 'hosted.py version/%s - on-device' % (VERSION,)
+        })
+
+    def use_api_key(self):
+        with self._lock:
+            now = time.time()
+            self._uses -= 1
+            if self._uses <= 0:
+                log('hosted API adhoc key used up')
+                self._api_key = None
+            elif now > self._expire:
+                log('hosted API adhoc key expired')
+                self._api_key = None
+            else:
+                log('hosted API adhoc key usage: %d uses, %ds left' %(
+                    self._uses, self._expire - now
+                ))
+            if self._api_key is None:
+                if time.time() < self._next_refresh:
+                    return None
+                log('refreshing hosted API adhoc key')
+                self._next_refresh = time.time() + 15
+                try:
+                    r = self._api['api_key'].get(
+                        params = dict(
+                            on_device_token = self._on_device_token
+                        ),
+                        timeout = 5,
+                    )
+                except:
+                    return None
+                self._api_key = r['api_key']
+                self._uses = r['uses']
+                self._expire = now + r['expire'] - 1
+                self._base_url = r['base_url']
+            return self._api_key
+
+    def add_default_args(self, kwargs):
+        if not 'timeout' in kwargs:
+            kwargs['timeout'] = 10
+        return kwargs
+
+    def ensure_api_key(self, kwargs):
+        api_key = self.use_api_key()
+        if api_key is None:
+            raise APIError('cannot retrieve API key')
+        kwargs['auth'] = ('', api_key)
+
+    def get(self, endpoint, **kwargs):
+        try:
+            self.ensure_api_key(kwargs)
+            r = self._session.get(
+                url = self._base_url + endpoint,
+                **self.add_default_args(kwargs)
+            )
+            r.raise_for_status()
+            return r.json()
+        except APIError:
+            raise
+        except Exception as err:
+            raise APIError(err)
+
+    def post(self, endpoint, **kwargs):
+        try:
+            self.ensure_api_key(kwargs)
+            r = self._session.post(
+                url = self._base_url + endpoint,
+                **self.add_default_args(kwargs)
+            )
+            r.raise_for_status()
+            return r.json()
+        except APIError:
+            raise
+        except Exception as err:
+            raise APIError(err)
+
+    def delete(self, endpoint, **kwargs):
+        try:
+            self.ensure_api_key(kwargs)
+            r = self._session.delete(
+                url = self._base_url + endpoint,
+                **self.add_default_args(kwargs)
+            )
+            r.raise_for_status()
+            return r.json()
+        except APIError:
+            raise
+        except Exception as err:
+            raise APIError(err)
 
 class DeviceKV(object):
     def __init__(self, api):
@@ -1248,6 +1352,9 @@ class Device(object):
 
     def pop(self, dirname='pop'):
         return ProofOfPlay(self._api, dirname)
+
+    def hosted_api(self, on_device_token):
+        return HostedAPI(self._api, on_device_token)
 
 if __name__ == "__main__":
     print("nothing to do here")
